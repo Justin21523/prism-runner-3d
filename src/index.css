@@ -1,0 +1,15 @@
+@import "tailwindcss";
+
+body {
+  @apply m-0 overflow-hidden font-sans;
+}
+
+html,
+body,
+#root {
+  @apply h-full w-full;
+}
+
+* {
+  @apply box-border;
+}
