@@ -31,7 +31,9 @@ const level1: LevelData = {
     { id: 'spike1', type: 'spike', position: [3.5, 0.2, -5] },
     { id: 'spike2', type: 'spike', position: [-3.5, 0.2, -5] },
   ],
-  enemies: [],
+  enemies: [
+    { id: 'patrol1', type: 'patrol', position: [1.5, 0.85, -2.5] },
+  ],
   rewards: [
     { id: 'shard1', type: 'shard', position: [3, 2.2, -3] },
     { id: 'shard2', type: 'shard', position: [-3, 3.2, -5] },

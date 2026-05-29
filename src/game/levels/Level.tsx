@@ -5,6 +5,7 @@ import BouncePad from '../platforms/BouncePad';
 import SpikeTrap from '../traps/SpikeTrap';
 import PrismShard from '../rewards/PrismShard';
 import GoalPortal from '../rewards/GoalPortal';
+import PatrolCube from '../enemies/PatrolCube';
 
 interface LevelProps {
   data: LevelData;
@@ -31,6 +32,12 @@ export default function Level({ data }: LevelProps) {
       })}
       {data.rewards.map((r) => {
         if (r.type === 'shard') return <PrismShard key={r.id} config={r} />;
+        return null;
+      })}
+      {data.enemies.map((enemy) => {
+        if (enemy.type === 'patrol') {
+          return <PatrolCube key={enemy.id} id={enemy.id} position={enemy.position} />;
+        }
         return null;
       })}
       <GoalPortal position={data.goalPosition} />

@@ -35,6 +35,15 @@ interface GameState {
   takeDamage: () => void;
   completeLevel: () => void;
   resetLevel: () => void;
+
+  enemies: { id: string; type: string; position: [number, number, number] }[];
+  addEnemy: (enemy: { id: string; type: string; position: [number, number, number] }) => void;
+  removeEnemy: (id: string) => void;
+  // UI
+  showMainMenu: boolean;
+  showPauseMenu: boolean;
+  setShowMainMenu: (v: boolean) => void;
+  setShowPauseMenu: (v: boolean) => void;
 }
 
 export const useGameStore = create<GameState>((set,) => ({
@@ -93,4 +102,12 @@ export const useGameStore = create<GameState>((set,) => ({
       timer: 0,
     });
   },
+  enemies: [],
+  addEnemy: (enemy) => set((state) => ({ enemies: [...state.enemies, enemy] })),
+  removeEnemy: (id) => set((state) => ({ enemies: state.enemies.filter(e => e.id !== id) })),
+  showMainMenu: true,
+  showPauseMenu: false,
+  setShowMainMenu: (v) => set({ showMainMenu: v }),
+  setShowPauseMenu: (v) => set({ showPauseMenu: v }),
+  
 }));

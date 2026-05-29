@@ -1,6 +1,5 @@
 import { PlayerController } from '../player/PlayerController';
 import { AIPlayerBrain } from './AIPlayerBrain';
-import { Vector3 } from 'three';
 
 /**
  * AIActionController ties the AIPlayerBrain to the PlayerController.
@@ -23,7 +22,13 @@ export class AIActionController {
    */
   update(delta: number, currentTime: number) {
     const state = this.playerController.getState();
-    const action = this.brain.getNextAction(state.position.clone());
+    const action = this.brain.getNextAction(
+      state.position.clone(),
+      state.grounded,
+      state.jumpCount,
+      state.velocity.clone(),
+      delta
+    );
     this.playerController.applyAIInput(action, delta, currentTime);
   }
 }

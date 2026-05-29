@@ -24,6 +24,7 @@ export interface PlayerState {
   jumpCount: number;
   dashing: boolean;
   dashTimer: number;
+  lastJumpPressed: boolean;
   lastBounceTime: number; // prevent multi-bounce in one frame
   lastDamageTime: number; // cooldown between spike hits
 }
@@ -33,7 +34,7 @@ const PLAYER_RADIUS = 0.5;
 const BOUNCE_VELOCITY = 15;
 const SPIKE_DAMAGE_COOLDOWN = 1.0; // seconds
 
-export default class PlayerController {
+export class PlayerController {
   public state: PlayerState;
 
   constructor() {
@@ -44,6 +45,7 @@ export default class PlayerController {
       jumpCount: 0,
       dashing: false,
       dashTimer: 0,
+      lastJumpPressed: false,
       lastBounceTime: 0,
       lastDamageTime: 0,
     };
@@ -101,16 +103,20 @@ export default class PlayerController {
     velocity.y -= GRAVITY * delta;
 
     // --- Jump & Double Jump ---
-    if (keys.Space && !this.state.dashing) {
+    const jumpPressed = Boolean(keys.Space);
+    const jumpJustPressed = jumpPressed && !this.state.lastJumpPressed;
+
+    if (jumpJustPressed && !this.state.dashing) {
       if (this.state.grounded) {
         velocity.y = JUMP_FORCE;
         this.state.jumpCount = 1;
         this.state.grounded = false;
       } else if (this.state.jumpCount < 2 && this.state.jumpCount > 0) {
-        velocity.y = JUMP_FORCE * 0.85;
+        velocity.y = JUMP_FORCE * 0.95;
         this.state.jumpCount = 2;
       }
     }
+    this.state.lastJumpPressed = jumpPressed;
 
     // --- Integrate position ---
     const displacement = velocity.clone().multiplyScalar(delta);
@@ -149,6 +155,7 @@ export default class PlayerController {
     const spikes: CollisionObject[] = [];
     const shards: CollisionObject[] = [];
     const goals: CollisionObject[] = [];
+    const enemies: CollisionObject[] = [];
 
     for (const obj of nearby) {
       switch (obj.type) {
@@ -157,9 +164,10 @@ export default class PlayerController {
         case 'spike': spikes.push(obj); break;
         case 'shard': shards.push(obj); break;
         case 'goal': goals.push(obj); break;
+        case 'enemy': enemies.push(obj); break;
       }
     }
-
+    
     // --- Shard collection ---
     for (const shard of shards) {
       const shardCenter = shard.box.getCenter(new Vector3());
@@ -189,7 +197,37 @@ export default class PlayerController {
         }
       }
     }
+    
+    // --- Enemy interaction ---
+    for (const enemy of enemies) {
+      const enemyBox = enemy.box;
+      const enemyCenter = enemyBox.getCenter(new Vector3());
+      // const halfHeight = (enemyBox.max.y - enemyBox.min.y) / 2;
+      const topY = enemyBox.max.y;
 
+      // Check if player is above enemy (stomp)
+      const playerBottom = candidatePos.y - PLAYER_RADIUS;
+      const horizontalOverlap =
+        Math.abs(playerCenter.x - enemyCenter.x) < (enemyBox.max.x - enemyBox.min.x) / 2 + PLAYER_RADIUS &&
+        Math.abs(playerCenter.z - enemyCenter.z) < (enemyBox.max.z - enemyBox.min.z) / 2 + PLAYER_RADIUS;
+      if (horizontalOverlap) {
+        if (this.state.velocity.y < 0 && playerBottom <= topY + 0.2 && this.state.position.y >= topY) {
+          // Stomp the enemy
+          worldCollider.unregister(enemy.id);
+          store.removeEnemy(enemy.id);
+          this.state.velocity.y = JUMP_FORCE * 0.6; // bounce
+          break;
+        } else {
+          // Player touched enemy from side or below -> take damage
+          if (currentTime - this.state.lastDamageTime > SPIKE_DAMAGE_COOLDOWN) {
+            store.takeDamage();
+            this.state.lastDamageTime = currentTime;
+          }
+          break;
+        }
+      }
+    }
+    
     // --- Bounce pads (checked before platforms for priority) ---
     for (const bounce of bounces) {
       const topY = bounce.box.max.y;
@@ -335,6 +373,7 @@ export default class PlayerController {
     this.state.jumpCount = 0;
     this.state.dashing = false;
     this.state.dashTimer = 0;
+    this.state.lastJumpPressed = false;
     this.state.lastBounceTime = 0;
     this.state.lastDamageTime = 0;
   }

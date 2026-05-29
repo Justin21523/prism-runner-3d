@@ -6,7 +6,7 @@ import { Box3, Vector3 } from 'three';
  */
 export interface CollisionObject {
   id: string;
-  type: 'platform' | 'bounce' | 'spike' | 'shard' | 'goal';
+  type: 'platform' | 'bounce' | 'spike' | 'shard' | 'goal' | 'enemy';
   box: Box3;        // Axis-aligned bounding box
   mesh?: THREE.Mesh; // Optional reference to update positions (for moving platforms)
   velocity?: Vector3;

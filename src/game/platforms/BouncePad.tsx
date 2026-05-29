@@ -17,7 +17,7 @@ interface Props {
 export default function BouncePad({ config }: Props) {
   const groupRef = useRef<THREE.Group>(null!);
   const [x, y, z] = config.position;
-  const [sx, _, sz] = config.scale ?? [1.5, 0.3, 1.5];
+  const [sx] = config.scale ?? [1.5, 0.3, 1.5];
 
   // Register collision object on mount
   useEffect(() => {

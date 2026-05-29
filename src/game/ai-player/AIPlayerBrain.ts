@@ -1,162 +1,156 @@
 import { Vector3 } from 'three';
-import { PlatformGraph } from './PlatformGraph';
 import { LevelData } from '../../types/level';
-import { NavNode, NavEdge } from '../../types/navigation';
-import { worldCollider } from '../collision/WorldCollider';
-import { useGameStore } from '../../store/gameStore';
 
-/**
- * AIPlayerBrain encapsulates the AI decision-making process:
- * 1. Build platform graph from level data.
- * 2. Choose a goal (main goal, collectible, etc.).
- * 3. Plan a path using A*.
- * 4. Provide the next action for the controller.
- */
+interface AIAction {
+  moveDir: Vector3;
+  jump: boolean;
+  dash: boolean;
+}
+
 export class AIPlayerBrain {
-  graph: PlatformGraph = new PlatformGraph();
-  currentPath: string[] = [];
-  currentPathIndex: number = 0;
-  levelData: LevelData | null = null;
+  private levelData: LevelData | null = null;
+  private waypoints: Vector3[] = [];
+  private waypointIndex = 0;
+  private jumpCooldown = 0;
+  private dashCooldown = 0;
+  private lastStuckCheck = new Vector3();
+  private stuckTimer = 0;
 
-  /** Rebuild the navigation graph when a new level is loaded. */
   loadLevel(level: LevelData) {
     this.levelData = level;
-    this.graph.buildFromLevel(level);
-    // Reset path
-    this.currentPath = [];
-    this.currentPathIndex = 0;
+    this.waypoints = this.buildWaypoints(level);
+    this.waypointIndex = 0;
+    this.jumpCooldown = 0;
+    this.dashCooldown = 0;
+    this.stuckTimer = 0;
+    this.lastStuckCheck.set(...level.playerStart);
   }
 
-  /**
-   * Main update: decide the immediate movement input for the player.
-   * @param playerPosition Current player position.
-   * @returns An object with moveDir, jump, dash.
-   */
-  getNextAction(playerPosition: Vector3): {
-    moveDir: Vector3;
-    jump: boolean;
-    dash: boolean;
-  } {
-    // Replan if we have no path or reached the end
-    if (this.currentPath.length === 0 || this.currentPathIndex >= this.currentPath.length) {
-      this.planNewPath(playerPosition);
-    }
-
-    if (this.currentPath.length === 0) {
-      // No path found, fallback: move directly toward goal
-      const goalPos = new Vector3(...this.levelData!.goalPosition);
-      return this.directMoveTo(playerPosition, goalPos);
-    }
-
-    // Follow the path: target the next node
-    const nextNodeId = this.currentPath[this.currentPathIndex];
-    const nextNode = this.graph.nodes.get(nextNodeId);
-    if (!nextNode) {
-      this.currentPath = [];
+  getNextAction(
+    playerPosition: Vector3,
+    grounded: boolean,
+    jumpCount: number,
+    velocity: Vector3,
+    delta: number
+  ): AIAction {
+    if (!this.levelData || this.waypoints.length === 0) {
       return { moveDir: new Vector3(), jump: false, dash: false };
     }
 
-    // If we are very close to the node, advance to next node
-    const distToNode = playerPosition.distanceTo(nextNode.position);
-    if (distToNode < 0.8) {
-      this.currentPathIndex++;
-      if (this.currentPathIndex >= this.currentPath.length) {
-        // Reached end of path, probably at goal
-        return { moveDir: new Vector3(), jump: false, dash: false };
-      }
+    this.jumpCooldown = Math.max(0, this.jumpCooldown - delta);
+    this.dashCooldown = Math.max(0, this.dashCooldown - delta);
+    this.updateStuckTimer(playerPosition, delta);
+
+    let target = this.waypoints[this.waypointIndex];
+    let horizontalDistance = this.horizontalDistance(playerPosition, target);
+    const verticalDistance = target.y - playerPosition.y;
+
+    if (
+      horizontalDistance < 0.8 &&
+      (Math.abs(verticalDistance) < 1.5 || playerPosition.y > target.y) &&
+      this.waypointIndex < this.waypoints.length - 1
+    ) {
+      this.waypointIndex += 1;
+      target = this.waypoints[this.waypointIndex];
+      horizontalDistance = this.horizontalDistance(playerPosition, target);
     }
 
-    // Determine required action from edge data
-    const currentNodeId = this.currentPathIndex > 0 ? this.currentPath[this.currentPathIndex - 1] : 'start';
-    const edge = this.graph.edges.find(
-      (e) => e.from === currentNodeId && e.to === nextNodeId
-    );
-    const action = edge?.action ?? 'walk';
+    const moveDir = new Vector3(target.x - playerPosition.x, 0, target.z - playerPosition.z);
+    if (moveDir.lengthSq() > 0.0001) moveDir.normalize();
 
-    // Move toward the next node
-    return this.moveToTarget(playerPosition, nextNode.position, action);
-  }
-
-  /**
-   * Choose a new path using A*. For now, always go from current position to goal.
-   * Later we can add other goals (shards, etc.)
-   */
-  private planNewPath(fromPosition: Vector3) {
-    if (!this.levelData) return;
-    // Find closest node to the player (or use 'start' node)
-    const startNodeId = this.findClosestNode(fromPosition);
-    const goalNodeId = 'goal';
-    const path = this.graph.findPath(startNodeId, goalNodeId);
-    if (path) {
-      this.currentPath = path;
-      this.currentPathIndex = 0;
-    } else {
-      this.currentPath = [];
-    }
-  }
-
-  /** Find the navigation node closest to a given position. */
-  private findClosestNode(pos: Vector3): string {
-    let bestId = 'start';
-    let bestDist = Infinity;
-    for (const [id, node] of this.graph.nodes.entries()) {
-      const d = pos.distanceTo(node.position);
-      if (d < bestDist) {
-        bestDist = d;
-        bestId = id;
-      }
-    }
-    return bestId;
-  }
-
-  /**
-   * Generate movement input to go from current position toward a target point.
-   * @param from Current player position.
-   * @param to Target position.
-   * @param action The type of action needed (affects jump/dash timing).
-   */
-  private moveToTarget(
-    from: Vector3,
-    to: Vector3,
-    action: string
-  ): { moveDir: Vector3; jump: boolean; dash: boolean } {
-    const dir = new Vector3().subVectors(to, from);
-    dir.y = 0; // horizontal only
-    if (dir.lengthSq() > 0) dir.normalize();
-    const horizontalDist = new Vector3(to.x - from.x, 0, to.z - from.z).length();
-    const verticalDist = to.y - from.y;
+    const needsHeight = target.y > playerPosition.y + 0.45;
+    const needsGapJump = horizontalDistance > 1.25 && horizontalDistance < 6.5;
+    const fallingShort = !grounded && velocity.y < 1.0 && target.y > playerPosition.y - 0.3;
+    const isStuck = this.stuckTimer > 0.7;
 
     let jump = false;
-    let dash = false;
-
-    // Trigger jump/dash when approaching edge or need height
-    if (action === 'jump' || action === 'doubleJump') {
-      if (verticalDist > 0.2 && horizontalDist > 1.0) {
+    if (this.jumpCooldown === 0) {
+      if (grounded && (needsHeight || needsGapJump || isStuck)) {
         jump = true;
-      } else if (verticalDist > 0.5) {
+      } else if (!grounded && jumpCount === 1 && (fallingShort || needsHeight || isStuck)) {
         jump = true;
       }
     }
-    if (action === 'dash') {
-      dash = true;
+
+    if (jump) {
+      this.jumpCooldown = grounded ? 0.28 : 0.38;
+      this.stuckTimer = 0;
     }
 
-    // If we are close horizontally but far vertically, jump
-    if (verticalDist > 1.5 && horizontalDist < 1.5) {
-      jump = true;
+    const dash =
+      this.dashCooldown === 0 &&
+      grounded &&
+      horizontalDistance > 5.5 &&
+      Math.abs(verticalDistance) < 0.7;
+
+    if (dash) {
+      this.dashCooldown = 1.2;
     }
 
-    return { moveDir: dir, jump, dash };
+    return { moveDir, jump, dash };
   }
 
-  /**
-   * Fallback direct movement (no pathfinding).
-   */
-  private directMoveTo(from: Vector3, to: Vector3) {
-    const dir = new Vector3().subVectors(to, from);
-    dir.y = 0;
-    if (dir.lengthSq() > 0) dir.normalize();
-    let jump = to.y > from.y + 1.0;
-    return { moveDir: dir, jump, dash: false };
+  private buildWaypoints(level: LevelData): Vector3[] {
+    const playerStart = new Vector3(...level.playerStart);
+    const goal = new Vector3(...level.goalPosition);
+    const preferredRoute = this.getPreferredRoute(level);
+
+    if (preferredRoute.length > 0) {
+      return [
+        playerStart,
+        ...preferredRoute
+          .map((id) => this.platformTopPoint(level, id))
+          .filter((point): point is Vector3 => Boolean(point)),
+        goal,
+      ];
+    }
+
+    const forwardSign = Math.sign(goal.z - playerStart.z) || -1;
+    const platformPoints = level.platforms
+      .filter((platform) => platform.id !== 'ground')
+      .map((platform) => this.platformTopPoint(level, platform.id))
+      .filter((point): point is Vector3 => Boolean(point))
+      .sort((a, b) => (a.z - b.z) * forwardSign);
+
+    return [playerStart, ...platformPoints, goal];
+  }
+
+  private getPreferredRoute(level: LevelData): string[] {
+    if (level.id === 'level-1') {
+      return ['bounce1', 'plat2', 'plat5'];
+    }
+
+    if (level.id === 'level-2') {
+      return ['bounce1', 'plat1', 'plat2', 'moving1', 'highPlat'];
+    }
+
+    return [];
+  }
+
+  private platformTopPoint(level: LevelData, id: string): Vector3 | null {
+    const platform = level.platforms.find((candidate) => candidate.id === id);
+    if (!platform) return null;
+
+    const scale = platform.scale ?? [2, 0.3, 2];
+    return new Vector3(
+      platform.position[0],
+      platform.position[1] + scale[1] / 2 + 0.5,
+      platform.position[2]
+    );
+  }
+
+  private horizontalDistance(from: Vector3, to: Vector3): number {
+    return Math.hypot(to.x - from.x, to.z - from.z);
+  }
+
+  private updateStuckTimer(playerPosition: Vector3, delta: number) {
+    const moved = this.horizontalDistance(playerPosition, this.lastStuckCheck);
+    if (moved < 0.05) {
+      this.stuckTimer += delta;
+      return;
+    }
+
+    this.stuckTimer = 0;
+    this.lastStuckCheck.copy(playerPosition);
   }
 }

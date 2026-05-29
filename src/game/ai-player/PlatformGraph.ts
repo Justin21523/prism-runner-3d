@@ -1,60 +1,73 @@
 import { Vector3 } from 'three';
 import { NavNode, NavEdge } from '../../types/navigation';
-import { LevelData, PlatformConfig } from '../../types/level';
+import { LevelData } from '../../types/level';
+
+/** Movement capability constants */
+const MAX_WALK_DIST = 1.2;
+const MAX_JUMP_HEIGHT = 3.0;
+const MAX_JUMP_DIST = 4.5;
+const MAX_DOUBLE_JUMP_DIST = 6.0;
+const MAX_DASH_DIST = 7.0;
 
 /**
- * Maximum horizontal distance the player can cover with a standard jump.
- * Values are tuned for the current move speed & jump force.
- */
-const MAX_JUMP_HORIZONTAL = 4.0;
-const MAX_JUMP_VERTICAL = 3.0;
-const MAX_DOUBLE_JUMP_HORIZONTAL = 5.5;
-const MAX_DASH_HORIZONTAL = 6.0;
-
-/**
- * PlatformGraph builds a navigation graph from a LevelData object.
- * It determines which platforms are reachable from each other and
- * provides an A* pathfinding method.
+ * PlatformGraph creates a navigation graph from level data,
+ * using platform corners as nodes for more accurate pathfinding.
  */
 export class PlatformGraph {
   nodes: Map<string, NavNode> = new Map();
   edges: NavEdge[] = [];
 
   /**
-   * Build the graph from level data.
-   * @param levelData The level configuration.
+   * Build graph from level data.
    */
-  buildFromLevel(levelData: LevelData) {
+  buildFromLevel(level: LevelData) {
     this.nodes.clear();
     this.edges = [];
 
-    // Create nodes for every platform (treat them as flat surfaces)
-    const allPlatforms = levelData.platforms;
-    // Also add a node for the player start and goal (they may not be on a platform center)
+    // Add start and goal nodes
     this.nodes.set('start', {
       id: 'start',
-      position: new Vector3(...levelData.playerStart),
+      position: new Vector3(...level.playerStart),
       type: 'static',
     });
     this.nodes.set('goal', {
       id: 'goal',
-      position: new Vector3(...levelData.goalPosition),
+      position: new Vector3(...level.goalPosition),
       type: 'static',
     });
 
-    for (const p of allPlatforms) {
+    // For each platform, generate corner nodes (4 corners at top surface)
+    for (const p of level.platforms) {
       const pos = new Vector3(...p.position);
-      this.nodes.set(p.id, {
-        id: p.id,
-        position: pos,
+      const scale = p.scale ?? [2, 0.3, 2];
+      const halfW = scale[0] / 2;
+      const halfD = scale[2] / 2;
+      const topY = pos.y + scale[1] / 2;
+      const corners = [
+        { id: p.id + '_c1', offset: new Vector3(-halfW, topY, -halfD) },
+        { id: p.id + '_c2', offset: new Vector3(halfW, topY, -halfD) },
+        { id: p.id + '_c3', offset: new Vector3(-halfW, topY, halfD) },
+        { id: p.id + '_c4', offset: new Vector3(halfW, topY, halfD) },
+      ];
+      for (const c of corners) {
+        this.nodes.set(c.id, {
+          id: c.id,
+          position: pos.clone().add(c.offset),
+          type: p.type === 'moving' ? 'moving' : 'static',
+        });
+      }
+      // Also keep a center node for fallback
+      this.nodes.set(p.id + '_center', {
+        id: p.id + '_center',
+        position: pos.clone().setY(topY),
         type: p.type === 'moving' ? 'moving' : 'static',
       });
     }
 
-    // Create edges between nodes that are reachable
-    const nodeArray = Array.from(this.nodes.values());
-    for (const from of nodeArray) {
-      for (const to of nodeArray) {
+    // Generate edges between all nodes that are reachable
+    const nodeList = Array.from(this.nodes.values());
+    for (const from of nodeList) {
+      for (const to of nodeList) {
         if (from.id === to.id) continue;
         const edge = this.computeEdge(from, to);
         if (edge) this.edges.push(edge);
@@ -63,37 +76,34 @@ export class PlatformGraph {
   }
 
   /**
-   * Determine if the player can travel from node A to node B
-   * and with what action.
+   * Determine if an edge from node A to B is possible, and what action is required.
    */
   private computeEdge(from: NavNode, to: NavNode): NavEdge | null {
     const dx = to.position.x - from.position.x;
     const dz = to.position.z - from.position.z;
-    const horizontalDist = Math.sqrt(dx * dx + dz * dz);
-    const verticalDist = to.position.y - from.position.y; // positive = higher
+    const horizDist = Math.sqrt(dx * dx + dz * dz);
+    const vertDist = to.position.y - from.position.y;
 
-    // Cannot jump down? Actually we can walk off edges, but we need a floor.
-    // For simplicity, we assume both nodes are on top of platforms.
-    // Vertical limits: player can jump up to MAX_JUMP_VERTICAL, fall any distance.
-    if (verticalDist > MAX_JUMP_VERTICAL) return null; // too high
+    // If the target is lower, we can just walk off, but require a fall distance limit
+    if (vertDist < -MAX_JUMP_HEIGHT) return null; // too steep fall
 
-    let action: NavEdge['action'] = 'walk';
-    let cost = horizontalDist + Math.abs(verticalDist) * 2;
+    let action: NavEdge['action'];
+    let cost: number;
 
-    if (horizontalDist <= 0.5 && Math.abs(verticalDist) <= 0.5) {
+    if (horizDist <= MAX_WALK_DIST && Math.abs(vertDist) <= 0.5) {
       action = 'walk';
       cost = 0.1;
-    } else if (horizontalDist <= MAX_JUMP_HORIZONTAL && verticalDist <= MAX_JUMP_VERTICAL) {
+    } else if (horizDist <= MAX_JUMP_DIST && vertDist <= MAX_JUMP_HEIGHT) {
       action = 'jump';
-      cost = horizontalDist + Math.abs(verticalDist) * 1.5;
-    } else if (horizontalDist <= MAX_DOUBLE_JUMP_HORIZONTAL && verticalDist <= MAX_JUMP_VERTICAL) {
+      cost = horizDist + Math.abs(vertDist) * 1.5;
+    } else if (horizDist <= MAX_DOUBLE_JUMP_DIST && vertDist <= MAX_JUMP_HEIGHT) {
       action = 'doubleJump';
-      cost = horizontalDist + Math.abs(verticalDist) * 1.5;
-    } else if (horizontalDist <= MAX_DASH_HORIZONTAL && Math.abs(verticalDist) <= 1.0) {
+      cost = horizDist + Math.abs(vertDist) * 1.5;
+    } else if (horizDist <= MAX_DASH_DIST && Math.abs(vertDist) <= 1.5) {
       action = 'dash';
-      cost = horizontalDist * 0.5;
+      cost = horizDist * 0.8;
     } else {
-      return null; // not reachable
+      return null;
     }
 
     return {
@@ -106,15 +116,13 @@ export class PlatformGraph {
   }
 
   /**
-   * A* pathfinding from startId to goalId.
-   * Returns array of node IDs in order.
+   * A* search from startId to goalId.
    */
   findPath(startId: string, goalId: string): string[] | null {
-    const openSet: Set<string> = new Set();
-    openSet.add(startId);
-    const cameFrom: Map<string, string> = new Map();
-    const gScore: Map<string, number> = new Map();
-    const fScore: Map<string, number> = new Map();
+    const openSet = new Set<string>([startId]);
+    const cameFrom = new Map<string, string>();
+    const gScore = new Map<string, number>();
+    const fScore = new Map<string, number>();
 
     for (const id of this.nodes.keys()) {
       gScore.set(id, Infinity);
@@ -124,7 +132,6 @@ export class PlatformGraph {
     fScore.set(startId, this.heuristic(startId, goalId));
 
     while (openSet.size > 0) {
-      // Node with lowest fScore
       let current: string | null = null;
       let minF = Infinity;
       for (const id of openSet) {
@@ -135,10 +142,8 @@ export class PlatformGraph {
         }
       }
       if (current === null || current === goalId) break;
-
       openSet.delete(current);
 
-      // Neighbors
       const neighbors = this.edges.filter((e) => e.from === current);
       for (const edge of neighbors) {
         const neighbor = edge.to;
@@ -152,20 +157,16 @@ export class PlatformGraph {
       }
     }
 
-    // Reconstruct path
     if (!cameFrom.has(goalId)) return null;
     const path: string[] = [goalId];
-    let current = goalId;
-    while (current !== startId) {
-      current = cameFrom.get(current)!;
-      path.unshift(current);
+    let cur = goalId;
+    while (cur !== startId) {
+      cur = cameFrom.get(cur)!;
+      path.unshift(cur);
     }
     return path;
   }
 
-  /**
-   * Heuristic: Euclidean distance between node positions.
-   */
   private heuristic(idA: string, idB: string): number {
     const a = this.nodes.get(idA);
     const b = this.nodes.get(idB);
