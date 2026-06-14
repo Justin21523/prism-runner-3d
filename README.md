@@ -2,7 +2,7 @@
 
 Prism Runner 3D is a fast-paced, third-person 3D platformer and endless runner built with React, Three.js (React Three Fiber), and Tailwind CSS. The game features dynamic level streaming, physics-based platforms, and advanced AI agents that navigate complex environments.
 
-![Prism Runner 3D Gameplay](./src/assets/hero.png)
+![Prism Runner 3D Gameplay](./public/screenshot.png)
 
 ## 🚀 Features
 
